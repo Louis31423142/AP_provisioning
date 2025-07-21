@@ -57,10 +57,12 @@ target_link_libraries(AP_neat PRIVATE
         pico_lwip_mdns
         pico_httpd_content
         pico_stdlib
+        hardware_flash
         )
 pico_add_extra_outputs(AP_neat)
 
 pico_add_library(pico_httpd_content NOFLAG)
 pico_set_lwip_httpd_content(pico_httpd_content INTERFACE
         ${CMAKE_CURRENT_LIST_DIR}/content/index.shtml
+        ${CMAKE_CURRENT_LIST_DIR}/content/connecting.shtml
         )
