@@ -1,0 +1,14 @@
+<html>
+<body>
+    <h1>AP wifi provisioning</h1>
+    <p>Current SSID is <!--#ssid--> </p>
+    <p>Current password is <!--#password--> </p>
+    <form action="/credentials.cgi" method="get">
+      <label for="ssid">SSID:</label><br>
+      <input type="text" id="ssid" name="ssid" value=""><br>
+      <label for="password">Password:</label><br>
+      <input type="text" id="password" name="password" value=""><br>
+      <input type="submit" value="Submit">
+    </form>
+</body>
+</html>
