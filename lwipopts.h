@@ -8,7 +8,7 @@
 #include "lwipopts_examples_common.h"
 
 // The following is needed to test mDns
-#define LWIP_MDNS_RESPONDER 1
+#define LWIP_MDNS_RESPONDER 0
 #define LWIP_IGMP 1
 #define LWIP_NUM_NETIF_CLIENT_DATA 1
 #define MDNS_RESP_USENETIF_EXTCALLBACK  1
@@ -19,7 +19,7 @@
 #define LWIP_HTTPD_CGI 1
 #define LWIP_HTTPD_SSI 1
 #define LWIP_HTTPD_SSI_MULTIPART 1
-#define LWIP_HTTPD_SUPPORT_POST 1
+#define LWIP_HTTPD_SUPPORT_POST 0
 #define LWIP_HTTPD_SSI_INCLUDE_TAG 0
 
 // Generated file containing html data
