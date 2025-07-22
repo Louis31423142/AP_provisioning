@@ -40,10 +40,6 @@ add_executable(AP_neat
         dhcpserver/dhcpserver.c
         dnsserver/dnsserver.c
         )
-target_compile_definitions(AP_neat PRIVATE
-        WIFI_SSID=\"${WIFI_SSID}\"
-        WIFI_PASSWORD=\"${WIFI_PASSWORD}\"
-        )
 target_include_directories(AP_neat PRIVATE
         ${CMAKE_CURRENT_LIST_DIR}
         ${CMAKE_CURRENT_LIST_DIR}/.. # for our common lwipopts
@@ -54,7 +50,6 @@ target_include_directories(AP_neat PRIVATE
 target_link_libraries(AP_neat PRIVATE
         pico_cyw43_arch_lwip_threadsafe_background
         pico_lwip_http
-        pico_lwip_mdns
         pico_httpd_content
         pico_stdlib
         hardware_flash
