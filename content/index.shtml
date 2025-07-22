@@ -1,4 +1,12 @@
 <html>
+<head>
+<style>
+body {background-color: whitesmoke;}
+h1   {color: crimson;}
+p    {color: black;}
+</style>
+</head>
+
 <body>
     <h1>AP wifi provisioning</h1>
     <p>Current SSID is <!--#ssid--> </p>
