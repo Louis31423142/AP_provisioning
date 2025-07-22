@@ -8,7 +8,6 @@
 #include "pico/stdlib.h"
 
 #include "lwip/ip4_addr.h"
-#include "lwip/apps/mdns.h"
 #include "lwip/init.h"
 #include "lwip/apps/httpd.h"
 
@@ -43,6 +42,104 @@ bool connection_status = false;
 #endif
 
 const uint8_t *flash_target_contents = (const uint8_t *) (XIP_BASE + FLASH_TARGET_OFFSET);
+
+// Function prototypes
+static void call_flash_range_erase(void *param);
+static void call_flash_range_program(void *param);
+void save_credentials(char ssid[], char password[]);
+void read_credentials(void);
+void attempt_wifi_connection(void);
+static const char *credential_cgi_handler(int iIndex, int iNumParams, char *pcParam[], char *pcValue[]);
+static const char *connect_cgi_handler(int iIndex, int iNumParams, char *pcParam[], char *pcValue[]);
+u16_t ssi_handler(int iIndex, char *pcInsert, int iInsertLen
+#if LWIP_HTTPD_SSI_MULTIPART
+    , uint16_t current_tag_part, uint16_t *next_tag_part
+#endif
+);
+
+static tCGI cgi_handlers[] = {
+    { "/credentials.cgi", credential_cgi_handler },
+    { "/connect.cgi", connect_cgi_handler },
+};
+
+// Be aware of LWIP_HTTPD_MAX_TAG_NAME_LEN
+static const char *ssi_tags[] = {
+    "ssid",
+    "password"
+};
+
+int main() {
+    stdio_init_all();
+    if (cyw43_arch_init()) {
+        printf("failed to initialise\n");
+        return 1;
+    }
+    printf("intitialised\n");
+
+    // First, try to connect to network using saved credentials
+    read_credentials();
+    printf("Current saved SSID: %s\n", ssid);
+    printf("Current saved password: %s\n", password);
+
+    cyw43_arch_enable_sta_mode();
+    if (cyw43_arch_wifi_connect_timeout_ms(ssid, password, CYW43_AUTH_WPA2_AES_PSK, 10000)) { 
+        printf("failed to connect with saved credentials \n");
+    } else {
+        printf("Connected.\n");
+        connection_status = true;
+    }
+
+    // If this fails, enable access point
+    if (connection_status == false) {
+        cyw43_arch_disable_sta_mode();
+        cyw43_arch_enable_ap_mode("picow_test", "12345678", CYW43_AUTH_WPA2_AES_PSK);
+        printf("\nReady, running server at %s\n", ip4addr_ntoa(netif_ip4_addr(netif_list)));
+
+        #if LWIP_IPV6
+        #define IP(x) ((x).u_addr.ip4)
+        #else
+        #define IP(x) (x)
+        #endif
+
+        ip4_addr_t mask;
+        ip4_addr_t gw;
+        IP(gw).addr = PP_HTONL(CYW43_DEFAULT_IP_AP_ADDRESS);
+        IP(mask).addr = PP_HTONL(CYW43_DEFAULT_IP_MASK);
+
+        #undef IP
+        dhcp_server_t dhcp_server;
+        dhcp_server_init(&dhcp_server, &gw, &mask);
+
+        dns_server_t dns_server;
+        dns_server_init(&dns_server, &gw);
+
+        char hostname[sizeof(CYW43_HOST_NAME) + 4];
+        memcpy(&hostname[0], CYW43_HOST_NAME, sizeof(CYW43_HOST_NAME) - 1);
+        hostname[sizeof(hostname) - 1] = '\0';
+        netif_set_hostname(&cyw43_state.netif[CYW43_ITF_STA], hostname);
+
+        // start http server
+        wifi_connected_time = get_absolute_time();
+
+        // setup http server
+        cyw43_arch_lwip_begin();
+        httpd_init();
+        http_set_cgi_handlers(cgi_handlers, LWIP_ARRAYSIZE(cgi_handlers));
+        http_set_ssi_handler(ssi_handler, ssi_tags, LWIP_ARRAYSIZE(ssi_tags));
+        cyw43_arch_lwip_end();
+    }
+
+    //wait for connection
+    while(connection_status == false) {
+        cyw43_arch_poll();
+        cyw43_arch_wait_for_work_until(make_timeout_time_ms(1000));
+    }
+
+    printf("Finished provisioning credentials. \n");
+    cyw43_arch_deinit();
+    return 0;
+}
+
 
 // This function will be called when it's safe to call flash_range_erase
 static void call_flash_range_erase(void *param) {
@@ -130,6 +227,20 @@ void read_credentials(void) {
     memcpy(password, t_password, sizeof(t_password));
 }
 
+void attempt_wifi_connection(void) {
+    cyw43_arch_disable_ap_mode();
+    cyw43_arch_enable_sta_mode();
+
+    if (cyw43_arch_wifi_connect_timeout_ms(ssid, password, CYW43_AUTH_WPA2_AES_PSK, 15000)) { 
+        panic("Failed to connect!");
+    } else {
+        printf("Connected.\n");
+        connection_status = true;
+        // success, so save credentials for future use
+        save_credentials(ssid, password);
+    }
+}
+
 static const char *credential_cgi_handler(int iIndex, int iNumParams, char *pcParam[], char *pcValue[]) {
     printf("credential_cgi_handler called\n");
     if (iNumParams > 0) {
@@ -142,27 +253,9 @@ static const char *credential_cgi_handler(int iIndex, int iNumParams, char *pcPa
 
 static const char *connect_cgi_handler(int iIndex, int iNumParams, char *pcParam[], char *pcValue[]) {
     printf("connect_cgi_handler called\n");
-    
-    //cyw43_arch_disable_ap_mode();
-    //cyw43_arch_enable_sta_mode();
-    if (cyw43_arch_wifi_connect_timeout_ms(ssid, password, CYW43_AUTH_WPA2_AES_PSK, 5000)) { 
-        printf("failed to connect \n");
-    } else {
-        printf("Connected.\n");
-        connection_status = true;
-    }
-    // revert to access point mode
-    //cyw43_arch_disable_sta_mode();
-    //cyw43_arch_enable_ap_mode("picow_test", "12345678", CYW43_AUTH_WPA2_AES_PSK);
-    //printf("\nReady, running iperf server at %s\n", ip4addr_ntoa(netif_ip4_addr(netif_list)));
-
+    attempt_wifi_connection();
     return "/index.shtml";
 }
-
-static tCGI cgi_handlers[] = {
-    { "/credentials.cgi", credential_cgi_handler },
-    { "/connect.cgi", connect_cgi_handler },
-};
 
 // Note that the buffer size is limited by LWIP_HTTPD_MAX_TAG_INSERT_LEN, so use LWIP_HTTPD_SSI_MULTIPART to return larger amounts of data
 u16_t ssi_handler(int iIndex, char *pcInsert, int iInsertLen
@@ -186,85 +279,4 @@ u16_t ssi_handler(int iIndex, char *pcInsert, int iInsertLen
         }
     }
   return (u16_t)printed;
-}
-
-// Be aware of LWIP_HTTPD_MAX_TAG_NAME_LEN
-static const char *ssi_tags[] = {
-    "ssid",
-    "password"
-};
-
-int main() {
-    stdio_init_all();
-    if (cyw43_arch_init()) {
-        printf("failed to initialise\n");
-        return 1;
-    }
-    printf("intitialised\n");
-
-    // First, try to connect to network using saved credentials
-    read_credentials();
-    printf("Current saved SSID: %s\n", ssid);
-    printf("Current saved password: %s\n", password);
-
-    cyw43_arch_enable_sta_mode();
-    if (cyw43_arch_wifi_connect_timeout_ms(ssid, password, CYW43_AUTH_WPA2_AES_PSK, 5000)) { 
-        printf("failed to connect with saved credentials \n");
-    } else {
-        printf("Connected.\n");
-        connection_status = true;
-    }
-
-    // If this fails, enable access point and wait for credentials to be sent
-    if (connection_status == false) {
-        cyw43_arch_disable_sta_mode();
-        cyw43_arch_enable_ap_mode("picow_test", "12345678", CYW43_AUTH_WPA2_AES_PSK);
-        printf("\nReady, running iperf server at %s\n", ip4addr_ntoa(netif_ip4_addr(netif_list)));
-
-        #if LWIP_IPV6
-        #define IP(x) ((x).u_addr.ip4)
-        #else
-        #define IP(x) (x)
-        #endif
-
-        ip4_addr_t mask;
-        ip4_addr_t gw;
-        IP(gw).addr = PP_HTONL(CYW43_DEFAULT_IP_AP_ADDRESS);
-        IP(mask).addr = PP_HTONL(CYW43_DEFAULT_IP_MASK);
-
-        #undef IP
-        dhcp_server_t dhcp_server;
-        dhcp_server_init(&dhcp_server, &gw, &mask);
-
-        dns_server_t dns_server;
-        dns_server_init(&dns_server, &gw);
-
-        char hostname[sizeof(CYW43_HOST_NAME) + 4];
-        memcpy(&hostname[0], CYW43_HOST_NAME, sizeof(CYW43_HOST_NAME) - 1);
-        //get_mac_ascii(CYW43_HAL_MAC_WLAN0, 8, 4, &hostname[sizeof(CYW43_HOST_NAME) - 1]);
-        hostname[sizeof(hostname) - 1] = '\0';
-        netif_set_hostname(&cyw43_state.netif[CYW43_ITF_STA], hostname);
-
-        // start http server
-        wifi_connected_time = get_absolute_time();
-
-        // setup http server
-        cyw43_arch_lwip_begin();
-        httpd_init();
-        http_set_cgi_handlers(cgi_handlers, LWIP_ARRAYSIZE(cgi_handlers));
-        http_set_ssi_handler(ssi_handler, ssi_tags, LWIP_ARRAYSIZE(ssi_tags));
-        cyw43_arch_lwip_end();
-        while(true) {
-    #if PICO_CYW43_ARCH_POLL
-            cyw43_arch_poll();
-            cyw43_arch_wait_for_work_until(led_time);
-    #else
-            sleep_ms(1000);
-    #endif
-        }
-    #if LWIP_MDNS_RESPONDER
-        mdns_resp_remove_netif(&cyw43_state.netif[CYW43_ITF_STA]);
-    #endif
-        cyw43_arch_deinit();
-    }
 }

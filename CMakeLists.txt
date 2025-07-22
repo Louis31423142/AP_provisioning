@@ -48,7 +48,7 @@ target_include_directories(AP_neat PRIVATE
         ${CMAKE_CURRENT_LIST_DIR}/dnsserver
         )
 target_link_libraries(AP_neat PRIVATE
-        pico_cyw43_arch_lwip_threadsafe_background
+        pico_cyw43_arch_lwip_poll
         pico_lwip_http
         pico_httpd_content
         pico_stdlib
