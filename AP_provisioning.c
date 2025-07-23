@@ -91,15 +91,10 @@ int main() {
     printf("intitialised\n");
 
     // just for testing: erase memory 
-    int rc = flash_safe_execute(call_flash_range_erase, (void*)FLASH_TARGET_OFFSET, UINT32_MAX);
-    hard_assert(rc == PICO_OK);
+    // int rc = flash_safe_execute(call_flash_range_erase, (void*)FLASH_TARGET_OFFSET, UINT32_MAX);
+    // hard_assert(rc == PICO_OK);
 
     // First, try to connect to network using saved credentials
-    read_credentials();
-
-    save_credentials("test", "test");
-    save_credentials("test", "test");
-
     read_credentials();
 
     cyw43_arch_enable_sta_mode();
