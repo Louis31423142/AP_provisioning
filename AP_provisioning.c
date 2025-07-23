@@ -23,8 +23,11 @@ static absolute_time_t wifi_connected_time;
 static bool led_on = false;
 
 // max lengths + 1
-char ssid[33] = "";
-char password[64] = "";
+char ssid[33];
+char password[64];
+
+char ssid_list[20][33];
+char password_list[20][64];
 
 bool connection_status = false;
 
@@ -33,11 +36,14 @@ bool connection_status = false;
 #define PICO_FLASH_BANK_TOTAL_SIZE (FLASH_SECTOR_SIZE * 2u)
 #endif
 
+// how many sectors would you like to reserve
+#define DESIRED_FLASH_SECTORS 10
+
 #ifndef PICO_FLASH_BANK_STORAGE_OFFSET
 #if PICO_RP2350 && PICO_RP2350_A2_SUPPORTED 
-#define FLASH_TARGET_OFFSET (PICO_FLASH_SIZE_BYTES - FLASH_SECTOR_SIZE - PICO_FLASH_BANK_TOTAL_SIZE)
+#define FLASH_TARGET_OFFSET (PICO_FLASH_SIZE_BYTES - FLASH_SECTOR_SIZE - PICO_FLASH_BANK_TOTAL_SIZE - FLASH_SECTOR_SIZE * DESIRED_FLASH_SECTORS)
 #else
-#define FLASH_TARGET_OFFSET (PICO_FLASH_SIZE_BYTES - PICO_FLASH_BANK_TOTAL_SIZE)
+#define FLASH_TARGET_OFFSET (PICO_FLASH_SIZE_BYTES - PICO_FLASH_BANK_TOTAL_SIZE - FLASH_SECTOR_SIZE * DESIRED_FLASH_SECTORS)
 #endif
 #endif
 
@@ -46,11 +52,16 @@ const uint8_t *flash_target_contents = (const uint8_t *) (XIP_BASE + FLASH_TARGE
 // Function prototypes
 static void call_flash_range_erase(void *param);
 static void call_flash_range_program(void *param);
+
 void save_credentials(char ssid[], char password[]);
 void read_credentials(void);
+
 void attempt_wifi_connection(void);
+
 static const char *credential_cgi_handler(int iIndex, int iNumParams, char *pcParam[], char *pcValue[]);
 static const char *connect_cgi_handler(int iIndex, int iNumParams, char *pcParam[], char *pcValue[]);
+static const char *append_cgi_handler(int iIndex, int iNumParams, char *pcParam[], char *pcValue[]);
+
 u16_t ssi_handler(int iIndex, char *pcInsert, int iInsertLen
 #if LWIP_HTTPD_SSI_MULTIPART
     , uint16_t current_tag_part, uint16_t *next_tag_part
@@ -60,6 +71,7 @@ u16_t ssi_handler(int iIndex, char *pcInsert, int iInsertLen
 static tCGI cgi_handlers[] = {
     { "/credentials.cgi", credential_cgi_handler },
     { "/connect.cgi", connect_cgi_handler },
+    { "/append.cgi", append_cgi_handler }
 };
 
 // Be aware of LWIP_HTTPD_MAX_TAG_NAME_LEN
@@ -76,11 +88,28 @@ int main() {
     }
     printf("intitialised\n");
 
+    int rc = flash_safe_execute(call_flash_range_erase, (void*)FLASH_TARGET_OFFSET, UINT32_MAX);
+    hard_assert(rc == PICO_OK);
+
     // First, try to connect to network using saved credentials
     read_credentials();
-    printf("Current saved SSID: %s\n", ssid);
-    printf("Current saved password: %s\n", password);
+    //printf("Current saved SSIDs: %s\n", ssid_list);
+    //printf("Current saved passwords: %s\n", password_list);
 
+    /*
+    //Test: write a couple of credentials then read
+    save_credentials("testing1", "testing2");
+    save_credentials("hello1", "goodbye2");
+    save_credentials("testing1", "testing2");
+    save_credentials("hello1", "goodbye2");
+
+    read_credentials();
+    for (int i = 0; i < 3; i++) {
+        printf("SSID %s\n", ssid_list[i]);
+        printf("PW %s\n", password_list[i]);
+    }
+
+    */
     cyw43_arch_enable_sta_mode();
     if (cyw43_arch_wifi_connect_timeout_ms(ssid, password, CYW43_AUTH_WPA2_AES_PSK, 10000)) { 
         printf("failed to connect with saved credentials \n");
@@ -161,70 +190,108 @@ void save_credentials(char ssid[], char password[]) {
 
     uint ssid_len = strlen(ssid);
     uint password_len = strlen(password);
+    uint credential_count;
+
+    //first check how many credentials are already saved
+    if (flash_target_contents[1] != 255) {
+        credential_count = flash_target_contents[1];
+        //incriment this count since we are about to add a credential
+        credential_count++;
+        flash_data[1] = credential_count;
+    } else {
+        // first (empty) save, so dont want to incriment
+        credential_count = 0;
+    }
+
+    //now need to find how far through the flash to start writing, and also add previous stuff to flash data
+    uint write_start_location = 2;
+    if (credential_count != 0) {
+        uint count = 0;
+        while (count < 2 * credential_count - 2) {
+            flash_data[write_start_location] = flash_target_contents[write_start_location];
+            if (flash_target_contents[write_start_location] == 0) {
+                count++;
+            }
+            write_start_location++;
+        }
+    }
 
     // no character has ascii value 0, so we can seperate our ssid and password with a single 0
     // first add ssid 
     for (uint i = 0; i < ssid_len; i++) {
         int ascii = (int) ssid[i];
-        flash_data[i] = ascii;
+        //printf("%i\n", ascii);
+        flash_data[i + write_start_location] = ascii;
     }
 
     //next add password
     for (uint i = 0; i < password_len; i++) {
         int ascii = (int) password[i];
-        flash_data[i + ssid_len + 1] = ascii;
+        flash_data[i + ssid_len + write_start_location + 1] = ascii;
     }
 
-    //now erase and then write flash
+    // test print flash data
+    /*
+    for (int i = 0; i < FLASH_PAGE_SIZE; i++) {
+        printf("%i ", flash_data[i]);
+    }
+    printf("\n");
+    */
+
+    // must always erase flash before write
     int rc = flash_safe_execute(call_flash_range_erase, (void*)FLASH_TARGET_OFFSET, UINT32_MAX);
     hard_assert(rc == PICO_OK);
 
+    // write flash
     uintptr_t params[] = { FLASH_TARGET_OFFSET, (uintptr_t)flash_data};
     rc = flash_safe_execute(call_flash_range_program, params, UINT32_MAX);
     hard_assert(rc == PICO_OK);
 }
 
 void read_credentials(void) {
-    uint counter = 0;
-    uint ssid_len = 0;
+    uint credential_count;
 
     // first check if the flash page begins with FF - this indicates the flash has not yet been written to 
-    // so must initialise with empty write (otherwise crashes)
+    // so must initialise with empty write
     if (flash_target_contents[0] == 255) {
         save_credentials("", "");
     }
 
+    //second byte saves credential count (allows 255 sets of credentials, should be enough)
+    credential_count = flash_target_contents[1];
     //initialise temporary ssid and password as 1 bigger than max to ensure null termination
-    char t_ssid[33] = {0};
-    char t_password[64] = {0};
+    char t_ssid_list[20][33] = {0};
+    char t_password_list[20][64] = {0};
 
-    // itterate through the flash and seperate ssid and password
-    for (uint i = 0; i < FLASH_PAGE_SIZE; i++) {
-        // when detect first zero, increment counter and continue. update ssid_len so we can index password
-        if (flash_target_contents[i] == 0 && counter == 0) {
-            counter++;
-            ssid_len = i;
-            continue;
-        } 
-        // when detect second zero, have extracted both ssid and password so stop
-        else if (flash_target_contents[i] == 0 && counter == 1)
-        {
+    uint space_count = 0;
+    uint start_index = 1;
+
+    for (uint i = 2; i < FLASH_PAGE_SIZE; i++) {
+        if (space_count >= 2*credential_count) {
             break;
-        }
-        // otherwise just write ssid and password
-        else if (counter == 0) {
-            t_ssid[i] = (char) flash_target_contents[i];
-        }
-        else if (counter == 1) {
-            t_password[i - ssid_len - 1] = (char) flash_target_contents[i];
-        }
+        } else if (flash_target_contents[i] == 0) {
+            space_count++;
+            start_index = i;
+            printf("\n");
+            //printf("space count %i\n", space_count);
+        } else if (flash_target_contents[i] != 0 && space_count % 2 == 0) {
+            // there is a char, and even space count. So we are reading a ssid
+            t_ssid_list[(int) space_count / 2][i - start_index - 1] = flash_target_contents[i];
+            //printf("%c", flash_target_contents[i]);
+        } else if (flash_target_contents[i] != 0 && space_count % 2 == 1) {
+            // there is a char and odd space count, so reading password
+            t_password_list[(int) space_count / 2][i - start_index - 1] = flash_target_contents[i];
+            //printf("%c", flash_target_contents[i]);
+        } 
     }
-    // update global ssid and password
-    memset(ssid, 0, sizeof(ssid));
-    memcpy(ssid, t_ssid, sizeof(t_ssid));
+    
 
-    memset(password, 0, sizeof(password));
-    memcpy(password, t_password, sizeof(t_password));
+    // update global ssid and password lists
+    memset(ssid_list, 0, sizeof(ssid_list));
+    memcpy(ssid_list, t_ssid_list, sizeof(t_ssid_list));
+
+    memset(password_list, 0, sizeof(password_list));
+    memcpy(password_list, t_password_list, sizeof(t_password_list));
 }
 
 void attempt_wifi_connection(void) {
@@ -243,13 +310,19 @@ void attempt_wifi_connection(void) {
 
 static const char *credential_cgi_handler(int iIndex, int iNumParams, char *pcParam[], char *pcValue[]) {
     printf("credential_cgi_handler called\n");
-    if (iNumParams > 0) {
-        strncpy(ssid, pcValue[0], sizeof(ssid) - 1);
-        strncpy(password, pcValue[1], sizeof(password) - 1);
-    }
+    strncpy(ssid, pcValue[0], sizeof(ssid) - 1);
+    strncpy(password, pcValue[1], sizeof(password) - 1);
     printf("SSID AND PASSWORD: %s %s \n", ssid, password);
     return "/index.shtml";
 }
+
+static const char *append_cgi_handler(int iIndex, int iNumParams, char *pcParam[], char *pcValue[]) {
+    printf("append_cgi_handler called\n");
+    save_credentials("ssid", "password");
+    printf("SSID AND PASSWORD: %s %s \n", ssid, password);
+    return "/index.shtml";
+}
+
 
 static const char *connect_cgi_handler(int iIndex, int iNumParams, char *pcParam[], char *pcValue[]) {
     printf("connect_cgi_handler called\n");

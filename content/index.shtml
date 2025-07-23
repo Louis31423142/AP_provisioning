@@ -18,8 +18,13 @@ p    {color: black;}
       <input type="text" id="password" name="password" value=""><br>
       <input type="submit" value="Submit">
     </form>
+
     <form action="/connect.cgi" method="get">
       <button name="foo" value="connect">Connect!</button>
+    </form>
+
+    <form action="/append.cgi" method="get">
+      <button name="foo" value="connect">APPEND!</button>
     </form>
 </body>
 </html>
