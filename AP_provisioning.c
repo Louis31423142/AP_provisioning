@@ -28,6 +28,7 @@ char password[64];
 
 char ssid_list[20][33];
 char password_list[20][64];
+int num_credentials;
 
 bool connection_status = false;
 
@@ -60,7 +61,7 @@ void attempt_wifi_connection(void);
 
 static const char *credential_cgi_handler(int iIndex, int iNumParams, char *pcParam[], char *pcValue[]);
 static const char *connect_cgi_handler(int iIndex, int iNumParams, char *pcParam[], char *pcValue[]);
-static const char *append_cgi_handler(int iIndex, int iNumParams, char *pcParam[], char *pcValue[]);
+static const char *connect_from_saved_cgi_handler(int iIndex, int iNumParams, char *pcParam[], char *pcValue[]);
 
 u16_t ssi_handler(int iIndex, char *pcInsert, int iInsertLen
 #if LWIP_HTTPD_SSI_MULTIPART
@@ -71,11 +72,12 @@ u16_t ssi_handler(int iIndex, char *pcInsert, int iInsertLen
 static tCGI cgi_handlers[] = {
     { "/credentials.cgi", credential_cgi_handler },
     { "/connect.cgi", connect_cgi_handler },
-    { "/append.cgi", append_cgi_handler }
+    { "/connect_from_saved.cgi", connect_from_saved_cgi_handler}
 };
 
 // Be aware of LWIP_HTTPD_MAX_TAG_NAME_LEN
 static const char *ssi_tags[] = {
+    "wifilist",
     "ssid",
     "password"
 };
@@ -88,34 +90,27 @@ int main() {
     }
     printf("intitialised\n");
 
+    // just for testing: erase memory 
     int rc = flash_safe_execute(call_flash_range_erase, (void*)FLASH_TARGET_OFFSET, UINT32_MAX);
     hard_assert(rc == PICO_OK);
 
     // First, try to connect to network using saved credentials
     read_credentials();
-    //printf("Current saved SSIDs: %s\n", ssid_list);
-    //printf("Current saved passwords: %s\n", password_list);
 
-    /*
-    //Test: write a couple of credentials then read
-    save_credentials("testing1", "testing2");
-    save_credentials("hello1", "goodbye2");
-    save_credentials("testing1", "testing2");
-    save_credentials("hello1", "goodbye2");
+    save_credentials("test", "test");
+    save_credentials("test", "test");
 
     read_credentials();
-    for (int i = 0; i < 3; i++) {
-        printf("SSID %s\n", ssid_list[i]);
-        printf("PW %s\n", password_list[i]);
-    }
 
-    */
     cyw43_arch_enable_sta_mode();
-    if (cyw43_arch_wifi_connect_timeout_ms(ssid, password, CYW43_AUTH_WPA2_AES_PSK, 10000)) { 
-        printf("failed to connect with saved credentials \n");
-    } else {
-        printf("Connected.\n");
-        connection_status = true;
+    for (int i = 0; i < num_credentials; i++) {
+        if (cyw43_arch_wifi_connect_timeout_ms(ssid_list[i], password_list[i], CYW43_AUTH_WPA2_AES_PSK, 10000)) { 
+            printf("failed to connect with saved credentials %i \n", i);
+        } else {
+            printf("Connected.\n");
+            connection_status = true;
+            break;
+        }
     }
 
     // If this fails, enable access point
@@ -168,7 +163,6 @@ int main() {
     cyw43_arch_deinit();
     return 0;
 }
-
 
 // This function will be called when it's safe to call flash_range_erase
 static void call_flash_range_erase(void *param) {
@@ -259,6 +253,7 @@ void read_credentials(void) {
 
     //second byte saves credential count (allows 255 sets of credentials, should be enough)
     credential_count = flash_target_contents[1];
+    num_credentials = credential_count;
     //initialise temporary ssid and password as 1 bigger than max to ensure null termination
     char t_ssid_list[20][33] = {0};
     char t_password_list[20][64] = {0};
@@ -316,13 +311,13 @@ static const char *credential_cgi_handler(int iIndex, int iNumParams, char *pcPa
     return "/index.shtml";
 }
 
-static const char *append_cgi_handler(int iIndex, int iNumParams, char *pcParam[], char *pcValue[]) {
-    printf("append_cgi_handler called\n");
-    save_credentials("ssid", "password");
-    printf("SSID AND PASSWORD: %s %s \n", ssid, password);
+static const char *connect_from_saved_cgi_handler(int iIndex, int iNumParams, char *pcParam[], char *pcValue[]) {
+    printf("load_from_saved_cgi_handler called\n");
+    strncpy(ssid, ssid_list[atoi(pcValue[0])], sizeof(ssid) - 1);
+    strncpy(password, password_list[atoi(pcValue[0])], sizeof(password) - 1);
+    attempt_wifi_connection();
     return "/index.shtml";
 }
-
 
 static const char *connect_cgi_handler(int iIndex, int iNumParams, char *pcParam[], char *pcValue[]) {
     printf("connect_cgi_handler called\n");
@@ -336,13 +331,21 @@ u16_t ssi_handler(int iIndex, char *pcInsert, int iInsertLen
     , uint16_t current_tag_part, uint16_t *next_tag_part
 #endif
 ) {
-    size_t printed;
+    int printed = 0;
     switch (iIndex) {
-        case 0: { // "ssid"
-            printed = snprintf(pcInsert, iInsertLen, ssid);
+        case 0: { // wifilist
+            for (int i = 0; i < num_credentials; i++) {
+                printed += snprintf(pcInsert + printed, iInsertLen - printed, 
+                                "<li>SSID: %s,   Password: %s,   Index: %i</li>", 
+                                ssid_list[i], password_list[i], i);
+            }
             break;
         }
-        case 1: { // "password"
+        case 1: { // ssid
+            printed = snprintf(pcInsert, iInsertLen, ssid);
+            break;         
+        }
+        case 2: { // password
             printed = snprintf(pcInsert, iInsertLen, password);
             break;
         }
@@ -351,5 +354,5 @@ u16_t ssi_handler(int iIndex, char *pcInsert, int iInsertLen
             break;
         }
     }
-  return (u16_t)printed;
+    return printed;
 }
