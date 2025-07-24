@@ -26,19 +26,20 @@ static bool led_on = false;
 char ssid[33];
 char password[64];
 
-char ssid_list[20][33];
-char password_list[20][64];
 int num_credentials;
 
 bool connection_status = false;
+
+// how many sectors would you like to reserve
+// each sector is 4096 bytes, so can hold 40 pairs of max length credentials
+#define DESIRED_FLASH_SECTORS 1
+char ssid_list[40 * DESIRED_FLASH_SECTORS][33];
+char password_list[40 * DESIRED_FLASH_SECTORS][64];
 
 // Define flash offset towards end of flash
 #ifndef PICO_FLASH_BANK_TOTAL_SIZE
 #define PICO_FLASH_BANK_TOTAL_SIZE (FLASH_SECTOR_SIZE * 2u)
 #endif
-
-// how many sectors would you like to reserve
-#define DESIRED_FLASH_SECTORS 10
 
 #ifndef PICO_FLASH_BANK_STORAGE_OFFSET
 #if PICO_RP2350 && PICO_RP2350_A2_SUPPORTED 
@@ -62,6 +63,7 @@ void attempt_wifi_connection(void);
 static const char *credential_cgi_handler(int iIndex, int iNumParams, char *pcParam[], char *pcValue[]);
 static const char *connect_cgi_handler(int iIndex, int iNumParams, char *pcParam[], char *pcValue[]);
 static const char *connect_from_saved_cgi_handler(int iIndex, int iNumParams, char *pcParam[], char *pcValue[]);
+static const char *clear_cgi_handler(int iIndex, int iNumParams, char *pcParam[], char *pcValue[]);
 
 u16_t ssi_handler(int iIndex, char *pcInsert, int iInsertLen
 #if LWIP_HTTPD_SSI_MULTIPART
@@ -72,7 +74,8 @@ u16_t ssi_handler(int iIndex, char *pcInsert, int iInsertLen
 static tCGI cgi_handlers[] = {
     { "/credentials.cgi", credential_cgi_handler },
     { "/connect.cgi", connect_cgi_handler },
-    { "/connect_from_saved.cgi", connect_from_saved_cgi_handler}
+    { "/connect_from_saved.cgi", connect_from_saved_cgi_handler},
+    {"/clear.cgi", clear_cgi_handler}
 };
 
 // Be aware of LWIP_HTTPD_MAX_TAG_NAME_LEN
@@ -90,16 +93,12 @@ int main() {
     }
     printf("intitialised\n");
 
-    // just for testing: erase memory 
-    // int rc = flash_safe_execute(call_flash_range_erase, (void*)FLASH_TARGET_OFFSET, UINT32_MAX);
-    // hard_assert(rc == PICO_OK);
-
     // First, try to connect to network using saved credentials
     read_credentials();
 
     cyw43_arch_enable_sta_mode();
     for (int i = 0; i < num_credentials; i++) {
-        if (cyw43_arch_wifi_connect_timeout_ms(ssid_list[i], password_list[i], CYW43_AUTH_WPA2_AES_PSK, 10000)) { 
+        if (cyw43_arch_wifi_connect_timeout_ms(ssid_list[i], password_list[i], CYW43_AUTH_WPA2_AES_PSK, 5000)) { 
             printf("failed to connect with saved credentials %i \n", i);
         } else {
             printf("Connected.\n");
@@ -162,20 +161,20 @@ int main() {
 // This function will be called when it's safe to call flash_range_erase
 static void call_flash_range_erase(void *param) {
     uint32_t offset = (uint32_t)param;
-    flash_range_erase(offset, FLASH_SECTOR_SIZE);
+    flash_range_erase(offset, FLASH_SECTOR_SIZE * DESIRED_FLASH_SECTORS);
 }
 
 // This function will be called when it's safe to call flash_range_program
 static void call_flash_range_program(void *param) {
     uint32_t offset = ((uintptr_t*)param)[0];
     const uint8_t *data = (const uint8_t *)((uintptr_t*)param)[1];
-    flash_range_program(offset, data, FLASH_PAGE_SIZE);
+    flash_range_program(offset, data, FLASH_SECTOR_SIZE * DESIRED_FLASH_SECTORS);
 }
 
 // Functions for saving and reading credentials from flash
 void save_credentials(char ssid[], char password[]) {
     // create empty 256 byte list
-    uint8_t flash_data[FLASH_PAGE_SIZE] = {0};
+    uint8_t flash_data[FLASH_SECTOR_SIZE * DESIRED_FLASH_SECTORS] = {0};
 
     uint ssid_len = strlen(ssid);
     uint password_len = strlen(password);
@@ -219,14 +218,6 @@ void save_credentials(char ssid[], char password[]) {
         flash_data[i + ssid_len + write_start_location + 1] = ascii;
     }
 
-    // test print flash data
-    /*
-    for (int i = 0; i < FLASH_PAGE_SIZE; i++) {
-        printf("%i ", flash_data[i]);
-    }
-    printf("\n");
-    */
-
     // must always erase flash before write
     int rc = flash_safe_execute(call_flash_range_erase, (void*)FLASH_TARGET_OFFSET, UINT32_MAX);
     hard_assert(rc == PICO_OK);
@@ -256,7 +247,7 @@ void read_credentials(void) {
     uint space_count = 0;
     uint start_index = 1;
 
-    for (uint i = 2; i < FLASH_PAGE_SIZE; i++) {
+    for (uint i = 2; i < FLASH_SECTOR_SIZE * DESIRED_FLASH_SECTORS; i++) {
         if (space_count >= 2*credential_count) {
             break;
         } else if (flash_target_contents[i] == 0) {
@@ -275,7 +266,6 @@ void read_credentials(void) {
         } 
     }
     
-
     // update global ssid and password lists
     memset(ssid_list, 0, sizeof(ssid_list));
     memcpy(ssid_list, t_ssid_list, sizeof(t_ssid_list));
@@ -317,6 +307,15 @@ static const char *connect_from_saved_cgi_handler(int iIndex, int iNumParams, ch
 static const char *connect_cgi_handler(int iIndex, int iNumParams, char *pcParam[], char *pcValue[]) {
     printf("connect_cgi_handler called\n");
     attempt_wifi_connection();
+    return "/index.shtml";
+}
+
+static const char *clear_cgi_handler(int iIndex, int iNumParams, char *pcParam[], char *pcValue[]) {
+    printf("clear_cgi_handler called\n");
+    int rc = flash_safe_execute(call_flash_range_erase, (void*)FLASH_TARGET_OFFSET, UINT32_MAX);
+    hard_assert(rc == PICO_OK);
+    save_credentials("", "");
+    read_credentials();
     return "/index.shtml";
 }
 
